@@ -1,0 +1,89 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    name: Build macOS (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-13 # macos-13 is Intel-based
+          - target: aarch64-apple-darwin
+            os: macos-14 # macos-14+ are Apple Silicon (ARM64)
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: driven-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/driven
+          retention-days: 7
+
+  universal-binary:
+    name: Create Universal Binary & DMG
+    needs: build-macos
+    runs-on: macos-14
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Intel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: driven-x86_64-apple-darwin
+          path: intel
+
+      - name: Download ARM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: driven-aarch64-apple-darwin
+          path: arm
+
+      - name: Make executable
+        run: |
+          chmod +x intel/driven
+          chmod +x arm/driven
+
+      - name: Create Universal Binary (lipo)
+        run: |
+          mkdir -p universal
+          lipo -create -output universal/driven intel/driven arm/driven
+          lipo -info universal/driven
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg_folder
+          cp universal/driven dmg_folder/
+          hdiutil create -volname "Driven" -srcfolder dmg_folder -ov -format UDZO Driven-macOS-universal.dmg
+
+      - name: Upload Universal Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: driven-universal-apple-darwin
+          path: universal/driven
+          retention-days: 7
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Driven-macOS-universal.dmg
+          path: Driven-macOS-universal.dmg
+          retention-days: 7
